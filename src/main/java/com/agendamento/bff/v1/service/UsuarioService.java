@@ -5,11 +5,13 @@ import com.agendamento.bff.v1.domain.model.GrupoEmpresarial;
 import com.agendamento.bff.v1.domain.model.Perfil;
 import com.agendamento.bff.v1.domain.model.Usuario;
 import com.agendamento.bff.v1.exception.ResourceNotFoundException;
+import com.agendamento.bff.v1.exception.UnauthorizedException;
 import com.agendamento.bff.v1.repository.GrupoEmpresarialRepository;
 import com.agendamento.bff.v1.repository.PerfilRepository;
 import com.agendamento.bff.v1.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
@@ -23,6 +25,7 @@ public class UsuarioService {
     private final UsuarioRepository usuarioRepository;
     private final GrupoEmpresarialRepository grupoEmpresarialRepository;
     private final PerfilRepository perfilRepository;
+    private final PasswordEncoder passwordEncoder;
 
     @Transactional(readOnly = true)
     public List<Usuario> listarPorGrupoEmpresarial(Long grupoEmpresarialId) {
@@ -39,6 +42,36 @@ public class UsuarioService {
                 ));
     }
 
+    @Transactional(readOnly = true)
+    public Usuario autenticar(String usuario, String senha) {
+        if (usuario == null || usuario.isBlank()) {
+            throw new IllegalArgumentException("O campo 'usuario' e obrigatorio.");
+        }
+        if (senha == null || senha.isBlank()) {
+            throw new IllegalArgumentException("O campo 'senha' e obrigatorio.");
+        }
+
+        List<Usuario> candidatos = usuarioRepository.findAllByEmailIgnoreCase(usuario);
+        if (candidatos.isEmpty()) {
+            throw new UnauthorizedException("Credenciais invalidas.");
+        }
+
+        List<Usuario> autenticados = candidatos.stream()
+                .filter(u -> u.getStatus() == Status.ATIVO)
+                .filter(u -> u.getSenha() != null && passwordEncoder.matches(senha, u.getSenha()))
+                .toList();
+
+        if (autenticados.isEmpty()) {
+            throw new UnauthorizedException("Credenciais invalidas ou usuario inativo.");
+        }
+
+        if (autenticados.size() > 1) {
+            throw new UnauthorizedException("Usuario duplicado para o login informado.");
+        }
+
+        return autenticados.getFirst();
+    }
+
     @Transactional
     public Usuario criar(Usuario novo, Long grupoEmpresarialId, List<Long> perfilIds) {
         if (novo.getId() != null) {
@@ -47,6 +80,7 @@ public class UsuarioService {
 
         validarDadosUsuario(novo);
         validarEmailDuplicado(grupoEmpresarialId, novo.getEmail(), null);
+        novo.setSenha(criptografarSenha(novo.getSenha()));
 
         GrupoEmpresarial grupoEmpresarial = buscarGrupoEmpresarial(grupoEmpresarialId);
         novo.setGrupoEmpresarial(grupoEmpresarial);
@@ -93,6 +127,11 @@ public class UsuarioService {
             atual.setStatus(dados.getStatus());
         }
 
+        if (dados.getSenha() == null || dados.getSenha().isBlank()) {
+            throw new IllegalArgumentException("O campo 'senha' e obrigatorio.");
+        }
+        atual.setSenha(criptografarSenha(dados.getSenha()));
+
         if (perfilIds != null) {
             atual.setPerfis(carregarPerfis(perfilIds));
         }
@@ -120,6 +159,10 @@ public class UsuarioService {
 
         if (usuario.getEmail() == null || usuario.getEmail().isBlank()) {
             throw new IllegalArgumentException("O campo 'email' e obrigatorio.");
+        }
+
+        if (usuario.getSenha() == null || usuario.getSenha().isBlank()) {
+            throw new IllegalArgumentException("O campo 'senha' e obrigatorio.");
         }
     }
 
@@ -171,5 +214,12 @@ public class UsuarioService {
         if (existe) {
             throw new IllegalArgumentException("Ja existe usuario com este email no grupo empresarial informado.");
         }
+    }
+
+    private String criptografarSenha(String senhaRecebida) {
+        if (senhaRecebida == null || senhaRecebida.isBlank()) {
+            throw new IllegalArgumentException("O campo 'senha' e obrigatorio.");
+        }
+        return passwordEncoder.encode(senhaRecebida);
     }
 }

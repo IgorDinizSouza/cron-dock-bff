@@ -13,6 +13,7 @@ public class UsuarioMapper {
         return Usuario.builder()
                 .descricao(req.descricao())
                 .email(req.email())
+                .senha(req.senha())
                 .status(req.status())
                 .build();
     }

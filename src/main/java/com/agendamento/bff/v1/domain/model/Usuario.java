@@ -1,6 +1,7 @@
 package com.agendamento.bff.v1.domain.model;
 
 import com.agendamento.bff.v1.domain.enumeration.Status;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -34,7 +35,7 @@ import java.util.Set;
 )
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-@ToString(exclude = {"grupoEmpresarial", "perfis"})
+@ToString(exclude = {"senha", "grupoEmpresarial", "perfis"})
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
@@ -50,6 +51,10 @@ public class Usuario {
 
     @Column(name = "email", length = 150, nullable = false)
     private String email;
+
+    @JsonIgnore
+    @Column(name = "senha", length = 255)
+    private String senha;
 
     @Column(name = "status", nullable = false)
     private Status status;

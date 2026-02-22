@@ -15,6 +15,9 @@ public interface UsuarioRepository extends JpaRepository<Usuario, Long> {
     @EntityGraph(attributePaths = {"grupoEmpresarial", "perfis", "perfis.roles"})
     Optional<Usuario> findByIdAndGrupoEmpresarialId(Long id, Long grupoEmpresarialId);
 
+    @EntityGraph(attributePaths = {"grupoEmpresarial", "perfis", "perfis.roles"})
+    List<Usuario> findAllByEmailIgnoreCase(String email);
+
     boolean existsByGrupoEmpresarialIdAndEmailIgnoreCase(Long grupoEmpresarialId, String email);
 
     boolean existsByGrupoEmpresarialIdAndEmailIgnoreCaseAndIdNot(Long grupoEmpresarialId, String email, Long id);

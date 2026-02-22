@@ -7,6 +7,7 @@ import java.util.List;
 public record UsuarioRequest(
         String descricao,
         String email,
+        String senha,
         Long grupoEmpresarialId,
         Status status,
         List<Long> perfilIds
