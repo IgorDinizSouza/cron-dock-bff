@@ -55,7 +55,7 @@ public final class PedidoBuscaMapper {
         if (idPedido == null) {
             return null;
         }
-        return "PED-" + idPedido;
+        return idPedido.toString();
     }
 
     private static String formatData(LocalDateTime dataCriacao) {
