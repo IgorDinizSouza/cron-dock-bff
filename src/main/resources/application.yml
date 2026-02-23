@@ -7,11 +7,10 @@ server:
 spring:
   main:
     allow-bean-definition-overriding: true
+  profiles:
+    default: homologacao
   datasource:
     driver-class-name: org.postgresql.Driver
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://aws-1-us-east-1.pooler.supabase.com:5432/postgres?sslmode=require}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres.eoqqdjxbazyrzusixccu}
-    password: ${SPRING_DATASOURCE_PASSWORD:8I44VsaBHB8XJBWA}
     hikari:
       maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAXIMUMPOOLSIZE:4}
       minimum-idle: ${SPRING_DATASOURCE_HIKARI_MINIMUMIDLE:0}
