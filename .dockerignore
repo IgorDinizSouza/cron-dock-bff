@@ -1,0 +1,7 @@
+.git
+.idea
+target
+*.log
+cloudflared.log
+app.log
+app.err.log
