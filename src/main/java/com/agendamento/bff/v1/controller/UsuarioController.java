@@ -1,6 +1,8 @@
 package com.agendamento.bff.v1.controller;
 
+import com.agendamento.bff.v1.domain.dto.request.UsuarioAprovacaoRequest;
 import com.agendamento.bff.v1.domain.dto.request.UsuarioRequest;
+import com.agendamento.bff.v1.domain.dto.response.UsuarioAprovacaoResponse;
 import com.agendamento.bff.v1.domain.dto.response.UsuarioResponse;
 import com.agendamento.bff.v1.domain.mapper.UsuarioMapper;
 import com.agendamento.bff.v1.domain.model.Usuario;
@@ -44,6 +46,15 @@ public class UsuarioController {
         return ResponseEntity.ok(UsuarioMapper.toResponse(usuario));
     }
 
+    @GetMapping("/aprovacao/pendentes")
+    public ResponseEntity<List<UsuarioResponse>> listarPendentesAprovacao() {
+        List<UsuarioResponse> resp = service.listarPendentesAprovacao()
+                .stream()
+                .map(UsuarioMapper::toResponse)
+                .toList();
+        return ResponseEntity.ok(resp);
+    }
+
     @PostMapping
     public ResponseEntity<UsuarioResponse> criar(@RequestBody UsuarioRequest req) {
         Usuario entity = UsuarioMapper.toEntity(req);
@@ -63,6 +74,14 @@ public class UsuarioController {
         Usuario dados = UsuarioMapper.toEntity(req);
         Usuario atualizado = service.atualizar(id, dados, grupoEmpresarialId, req.perfilIds());
         return ResponseEntity.ok(UsuarioMapper.toResponse(atualizado));
+    }
+
+    @PutMapping("/{usuarioId}/aprovacao")
+    public ResponseEntity<UsuarioAprovacaoResponse> aprovarUsuario(
+            @PathVariable Long usuarioId,
+            @RequestBody UsuarioAprovacaoRequest req
+    ) {
+        return ResponseEntity.ok(service.aprovarUsuario(usuarioId, req));
     }
 
     @DeleteMapping("/grupo-empresarial/{grupoEmpresarialId}/{id}")

@@ -3,17 +3,24 @@ package com.agendamento.bff.v1.service;
 import com.agendamento.bff.v1.domain.enumeration.Status;
 import com.agendamento.bff.v1.domain.model.GrupoEmpresarial;
 import com.agendamento.bff.v1.domain.model.Perfil;
+import com.agendamento.bff.v1.domain.model.StatusAprovacaoUsuario;
 import com.agendamento.bff.v1.domain.model.Usuario;
+import com.agendamento.bff.v1.domain.model.UsuarioAprovacao;
+import com.agendamento.bff.v1.domain.dto.request.UsuarioAprovacaoRequest;
+import com.agendamento.bff.v1.domain.dto.response.UsuarioAprovacaoResponse;
 import com.agendamento.bff.v1.exception.ResourceNotFoundException;
 import com.agendamento.bff.v1.exception.UnauthorizedException;
 import com.agendamento.bff.v1.repository.GrupoEmpresarialRepository;
 import com.agendamento.bff.v1.repository.PerfilRepository;
+import com.agendamento.bff.v1.repository.StatusAprovacaoUsuarioRepository;
+import com.agendamento.bff.v1.repository.UsuarioAprovacaoRepository;
 import com.agendamento.bff.v1.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -22,7 +29,15 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class UsuarioService {
 
+    private static final Long STATUS_APROVACAO_SOLICITADO = 1L;
+    private static final Long STATUS_APROVACAO_APROVADO = 2L;
+    private static final Long STATUS_APROVACAO_RECUSADO = 3L;
+    private static final String ROLE_APROVAR_USUARIO = "APROVAR_USUARIO";
+    private static final String ROLE_ADMINISTRADOR = "ADMINISTRADOR";
+
     private final UsuarioRepository usuarioRepository;
+    private final UsuarioAprovacaoRepository usuarioAprovacaoRepository;
+    private final StatusAprovacaoUsuarioRepository statusAprovacaoUsuarioRepository;
     private final GrupoEmpresarialRepository grupoEmpresarialRepository;
     private final PerfilRepository perfilRepository;
     private final PasswordEncoder passwordEncoder;
@@ -30,7 +45,20 @@ public class UsuarioService {
     @Transactional(readOnly = true)
     public List<Usuario> listarPorGrupoEmpresarial(Long grupoEmpresarialId) {
         validarGrupoEmpresarialExiste(grupoEmpresarialId);
-        return usuarioRepository.findAllByGrupoEmpresarialId(grupoEmpresarialId);
+        List<Usuario> usuarios = usuarioRepository.findAllByGrupoEmpresarialId(grupoEmpresarialId);
+        List<Long> usuariosPendentesIds =
+                usuarioAprovacaoRepository.findIdsUsuarioSolicitanteByStatusAprovacaoUsuarioIdAndGrupoEmpresarialId(
+                        STATUS_APROVACAO_SOLICITADO,
+                        grupoEmpresarialId
+                );
+
+        if (usuariosPendentesIds.isEmpty()) {
+            return usuarios;
+        }
+
+        return usuarios.stream()
+                .filter(usuario -> !usuariosPendentesIds.contains(usuario.getId()))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -40,6 +68,14 @@ public class UsuarioService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Usuario nao encontrado. grupoEmpresarialId=" + grupoEmpresarialId + ", usuarioId=" + usuarioId
                 ));
+    }
+
+    @Transactional(readOnly = true)
+    public List<Usuario> listarPendentesAprovacao() {
+        return usuarioAprovacaoRepository.findAllByStatusAprovacaoUsuarioId(STATUS_APROVACAO_SOLICITADO)
+                .stream()
+                .map(UsuarioAprovacao::getUsuarioSolicitante)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -57,19 +93,43 @@ public class UsuarioService {
         }
 
         List<Usuario> autenticados = candidatos.stream()
-                .filter(u -> u.getStatus() == Status.ATIVO)
                 .filter(u -> u.getSenha() != null && passwordEncoder.matches(senha, u.getSenha()))
                 .toList();
 
         if (autenticados.isEmpty()) {
-            throw new UnauthorizedException("Credenciais invalidas ou usuario inativo.");
+            throw new UnauthorizedException("Credenciais invalidas.");
         }
 
         if (autenticados.size() > 1) {
             throw new UnauthorizedException("Usuario duplicado para o login informado.");
         }
 
-        return autenticados.getFirst();
+        Usuario autenticado = autenticados.getFirst();
+
+        if (autenticado.getStatus() != Status.ATIVO) {
+            throw new UnauthorizedException("Credenciais invalidas ou usuario inativo.");
+        }
+
+        UsuarioAprovacao aprovacao = usuarioAprovacaoRepository.findByUsuarioSolicitanteId(autenticado.getId())
+                .orElse(null);
+
+        if (aprovacao == null || aprovacao.getStatusAprovacaoUsuario() == null
+                || aprovacao.getStatusAprovacaoUsuario().getId() == null
+                || STATUS_APROVACAO_SOLICITADO.equals(aprovacao.getStatusAprovacaoUsuario().getId())) {
+            throw new UnauthorizedException("Seu usuário foi solicitado e esta aguardando aprovação");
+        }
+
+        if (STATUS_APROVACAO_RECUSADO.equals(aprovacao.getStatusAprovacaoUsuario().getId())) {
+            throw new UnauthorizedException(
+                    "O usuário não foi aprovado, por favor, entre em contato com o administrador do sistema"
+            );
+        }
+
+        if (!STATUS_APROVACAO_APROVADO.equals(aprovacao.getStatusAprovacaoUsuario().getId())) {
+            throw new UnauthorizedException("Usuario sem aprovacao valida para acesso.");
+        }
+
+        return autenticado;
     }
 
     @Transactional
@@ -90,7 +150,86 @@ public class UsuarioService {
             novo.setStatus(Status.ATIVO);
         }
 
-        return usuarioRepository.save(novo);
+        Usuario salvo = usuarioRepository.save(novo);
+        criarFluxoAprovacaoInicial(salvo);
+        return salvo;
+    }
+
+    @Transactional
+    public UsuarioAprovacaoResponse aprovarUsuario(Long usuarioSolicitanteId, UsuarioAprovacaoRequest req) {
+        if (usuarioSolicitanteId == null) {
+            throw new IllegalArgumentException("O campo 'usuarioSolicitanteId' e obrigatorio.");
+        }
+        if (req == null) {
+            throw new IllegalArgumentException("O corpo da requisicao e obrigatorio.");
+        }
+        if (req.idUsuarioAprovador() == null) {
+            throw new IllegalArgumentException("O campo 'idUsuarioAprovador' e obrigatorio.");
+        }
+        if (req.idStatusAprovacaoUsuario() == null) {
+            throw new IllegalArgumentException("O campo 'idStatusAprovacaoUsuario' e obrigatorio.");
+        }
+        if (!STATUS_APROVACAO_APROVADO.equals(req.idStatusAprovacaoUsuario())
+                && !STATUS_APROVACAO_RECUSADO.equals(req.idStatusAprovacaoUsuario())) {
+            throw new IllegalArgumentException("O status de aprovacao deve ser 2 (aprovado) ou 3 (recusado).");
+        }
+
+        if (STATUS_APROVACAO_RECUSADO.equals(req.idStatusAprovacaoUsuario())
+                && (req.motivoRecusa() == null || req.motivoRecusa().isBlank())) {
+            throw new IllegalArgumentException("O campo 'motivoRecusa' e obrigatorio quando o status for recusado.");
+        }
+
+        Usuario usuarioSolicitante = usuarioRepository.findById(usuarioSolicitanteId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Usuario solicitante nao encontrado. id=" + usuarioSolicitanteId
+                ));
+
+        Usuario usuarioAprovador = usuarioRepository.findById(req.idUsuarioAprovador())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Usuario aprovador nao encontrado. id=" + req.idUsuarioAprovador()
+                ));
+
+        validarRoleAprovador(usuarioAprovador);
+
+        StatusAprovacaoUsuario statusAprovacao = statusAprovacaoUsuarioRepository.findById(req.idStatusAprovacaoUsuario())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Status de aprovacao nao encontrado. id=" + req.idStatusAprovacaoUsuario()
+                ));
+
+        UsuarioAprovacao aprovacao = usuarioAprovacaoRepository.findByUsuarioSolicitanteId(usuarioSolicitanteId)
+                .orElseGet(() -> UsuarioAprovacao.builder()
+                        .usuarioSolicitante(usuarioSolicitante)
+                        .dataSolicitacao(LocalDateTime.now())
+                        .build());
+
+        aprovacao.setUsuarioSolicitante(usuarioSolicitante);
+        aprovacao.setUsuarioAprovador(usuarioAprovador);
+        aprovacao.setStatusAprovacaoUsuario(statusAprovacao);
+        aprovacao.setMotivoRecusa(STATUS_APROVACAO_RECUSADO.equals(statusAprovacao.getId())
+                ? req.motivoRecusa().trim()
+                : null);
+        aprovacao.setDataAprovacao(LocalDateTime.now());
+        if (aprovacao.getDataSolicitacao() == null) {
+            aprovacao.setDataSolicitacao(LocalDateTime.now());
+        }
+
+        UsuarioAprovacao salvo = usuarioAprovacaoRepository.save(aprovacao);
+
+        String mensagem = STATUS_APROVACAO_APROVADO.equals(statusAprovacao.getId())
+                ? "Usuario aprovado com sucesso."
+                : "Usuario recusado com sucesso.";
+
+        return new UsuarioAprovacaoResponse(
+                salvo.getId(),
+                salvo.getUsuarioSolicitante() != null ? salvo.getUsuarioSolicitante().getId() : null,
+                salvo.getUsuarioAprovador() != null ? salvo.getUsuarioAprovador().getId() : null,
+                salvo.getStatusAprovacaoUsuario() != null ? salvo.getStatusAprovacaoUsuario().getId() : null,
+                salvo.getStatusAprovacaoUsuario() != null ? salvo.getStatusAprovacaoUsuario().getDescricao() : null,
+                salvo.getMotivoRecusa(),
+                salvo.getDataSolicitacao(),
+                salvo.getDataAprovacao(),
+                mensagem
+        );
     }
 
     @Transactional
@@ -221,5 +360,44 @@ public class UsuarioService {
             throw new IllegalArgumentException("O campo 'senha' e obrigatorio.");
         }
         return passwordEncoder.encode(senhaRecebida);
+    }
+
+    private void criarFluxoAprovacaoInicial(Usuario usuario) {
+        if (usuario == null || usuario.getId() == null) {
+            throw new IllegalArgumentException("Usuario salvo e obrigatorio para iniciar fluxo de aprovacao.");
+        }
+
+        if (usuarioAprovacaoRepository.findByUsuarioSolicitanteId(usuario.getId()).isPresent()) {
+            return;
+        }
+
+        StatusAprovacaoUsuario statusSolicitado = statusAprovacaoUsuarioRepository.findById(STATUS_APROVACAO_SOLICITADO)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Status de aprovacao 'Solicitado' nao encontrado. id=" + STATUS_APROVACAO_SOLICITADO
+                ));
+
+        UsuarioAprovacao aprovacao = UsuarioAprovacao.builder()
+                .usuarioSolicitante(usuario)
+                .statusAprovacaoUsuario(statusSolicitado)
+                .dataSolicitacao(LocalDateTime.now())
+                .build();
+
+        usuarioAprovacaoRepository.save(aprovacao);
+
+     }
+
+    private void validarRoleAprovador(Usuario usuarioAprovador) {
+        boolean possuiRole = usuarioAprovador.getPerfis() != null && usuarioAprovador.getPerfis().stream()
+                .filter(perfil -> perfil.getRoles() != null)
+                .flatMap(perfil -> perfil.getRoles().stream())
+                .anyMatch(role -> role.getNome() != null
+                        && (ROLE_APROVAR_USUARIO.equalsIgnoreCase(role.getNome())
+                        || ROLE_ADMINISTRADOR.equalsIgnoreCase(role.getNome())));
+
+        if (!possuiRole) {
+            throw new UnauthorizedException(
+                    "Usuario aprovador nao possui as roles APROVAR_USUARIO ou ROLE_ADMINISTRADOR."
+            );
+        }
     }
 }
